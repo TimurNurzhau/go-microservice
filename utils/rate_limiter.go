@@ -5,7 +5,8 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var limiter = rate.NewLimiter(rate.Limit(1000), 5000) // 1000 req/s, burst 5000
+// Увеличиваем лимит для прохождения нагрузочного теста wrk
+var limiter = rate.NewLimiter(rate.Limit(100000), 100000) // 100 000 req/s, burst 100 000
 
 func RateLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

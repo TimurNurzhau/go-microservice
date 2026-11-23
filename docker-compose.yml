@@ -6,3 +6,19 @@ services:
     environment:
       - PORT=8080
     restart: unless-stopped
+    networks:
+      - microservice-net
+
+  wrk:
+    image: williamyeh/wrk
+    profiles: ["test"]
+    depends_on:
+      - app
+    networks:
+      - microservice-net
+# Запуск: docker run --rm --network go-microservice_microservice-net williamyeh/wrk \
+#   -t12 -c500 -d60s http://app:8080/api/users
+
+networks:
+  microservice-net:
+    driver: bridge

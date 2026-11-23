@@ -5,6 +5,7 @@ import (
 	"go-microservice/handlers"
 	"go-microservice/metrics"
 	"go-microservice/services"
+	"go-microservice/storage"
 	"go-microservice/utils"
 	"log"
 	"net/http"
@@ -13,6 +14,14 @@ import (
 )
 
 func main() {
+	// Инициализация MinIO (S3-совместимое хранилище)
+	_, err := storage.InitMinIO()
+	if err != nil {
+		log.Printf("Предупреждение: MinIO не инициализирован: %v\n", err)
+	} else {
+		log.Println("MinIO успешно инициализирован")
+	}
+
 	// Инициализация сервиса (in-memory)
 	userService := services.NewUserService()
 	userHandler := handlers.NewUserHandler(userService)

@@ -5,11 +5,26 @@ import (
 	"time"
 )
 
-// LogAction — асинхронное логирование действий (goroutine).
-// Без искусственной задержки: логирование не влияет на latency ответа.
-func LogAction(action string, userID int) {
+type auditEntry struct {
+	action string
+	userID int
+	ts     time.Time
+}
+
+var auditCh = make(chan auditEntry, 10000)
+
+func init() {
 	go func() {
-		log.Printf("[AUDIT] Action: %s, UserID: %d, Time: %s",
-			action, userID, time.Now().Format(time.RFC3339))
+		for e := range auditCh {
+			log.Printf("[AUDIT] Action: %s, UserID: %d, Time: %s",
+				e.action, e.userID, e.ts.Format(time.RFC3339))
+		}
 	}()
+}
+
+func LogAction(action string, userID int) {
+	select {
+	case auditCh <- auditEntry{action, userID, time.Now()}:
+	default:
+	}
 }

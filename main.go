@@ -9,12 +9,12 @@ import (
 	"go-microservice/utils"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/gorilla/mux"
 )
 
 func main() {
-	// Инициализация MinIO (S3-совместимое хранилище)
 	_, err := storage.InitMinIO()
 	if err != nil {
 		log.Printf("Предупреждение: MinIO не инициализирован: %v\n", err)
@@ -22,37 +22,33 @@ func main() {
 		log.Println("MinIO успешно инициализирован")
 	}
 
-	// Инициализация сервиса (in-memory)
 	userService := services.NewUserService()
 	userHandler := handlers.NewUserHandler(userService)
 	integrationHandler := handlers.NewIntegrationHandler()
 
-	// Инициализация метрик Prometheus
 	metrics.Init()
 
-	// Настройка роутера
 	r := mux.NewRouter()
 
-	// Маршрут для метрик (без rate limiting)
+	// /metrics и /health — вне rate limiter
 	r.Handle("/metrics", metrics.Handler()).Methods("GET")
-
-	// Health Check
 	r.HandleFunc("/health", integrationHandler.HealthCheck).Methods("GET")
 
-	// API для пользователей
+	// API: rate limiter + метрики
 	api := r.PathPrefix("/api").Subrouter()
+	api.Use(utils.RateLimitMiddleware)
+	api.Use(metrics.MetricsMiddleware)
 	api.HandleFunc("/users", userHandler.GetAll).Methods("GET")
 	api.HandleFunc("/users", userHandler.Create).Methods("POST")
 	api.HandleFunc("/users/{id}", userHandler.GetByID).Methods("GET")
 	api.HandleFunc("/users/{id}", userHandler.Update).Methods("PUT")
 	api.HandleFunc("/users/{id}", userHandler.Delete).Methods("DELETE")
 
-	// Применяем middleware ко всем маршрутам
-	// MetricsMiddleware должен быть первым, чтобы считать всё
-	r.Use(metrics.MetricsMiddleware)
-	r.Use(utils.RateLimitMiddleware)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
 
-	port := ":8080"
 	fmt.Printf("Server started on port %s\n", port)
-	log.Fatal(http.ListenAndServe(port, r))
+	log.Fatal(http.ListenAndServe(":"+port, r))
 }

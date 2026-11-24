@@ -12,12 +12,10 @@ import (
 )
 
 func InitMinIO() (*minio.Client, error) {
-	// Читаем настройки из переменных окружения (для Docker-сети)
-	// Если переменных нет, используем публичный play.min.io
-	endpoint := getEnv("MINIO_ENDPOINT", "play.min.io")
-	accessKeyID := getEnv("MINIO_ACCESS_KEY", "Q3AM3UQ867SPQQA43P2F")
-	secretAccessKey := getEnv("MINIO_SECRET_KEY", "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG")
-	useSSL := getEnv("MINIO_USE_SSL", "true") == "true"
+	endpoint := getEnv("MINIO_ENDPOINT", "minio:9000")
+	accessKeyID := getEnv("MINIO_ACCESS_KEY", "minioadmin")
+	secretAccessKey := getEnv("MINIO_SECRET_KEY", "minioadmin")
+	useSSL := getEnv("MINIO_USE_SSL", "false") == "true"
 
 	minioClient, err := minio.New(endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(accessKeyID, secretAccessKey, ""),
@@ -30,7 +28,6 @@ func InitMinIO() (*minio.Client, error) {
 	bucketName := "users-avatars"
 	ctx := context.Background()
 
-	// Проверяем, существует ли бакет
 	exists, err := minioClient.BucketExists(ctx, bucketName)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка проверки бакета: %w", err)
@@ -46,7 +43,6 @@ func InitMinIO() (*minio.Client, error) {
 		log.Printf("MinIO: бакет %s уже существует\n", bucketName)
 	}
 
-	// Загружаем тестовый файл (исправлено: передаём strings.NewReader вместо nil)
 	objectName := "test-connection.txt"
 	content := "MinIO integration successfully initialized!"
 	_, err = minioClient.PutObject(ctx, bucketName, objectName,

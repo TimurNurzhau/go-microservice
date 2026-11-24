@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"go-microservice/models"
+	"sort"
 	"sync"
 )
 
@@ -22,18 +23,24 @@ func NewUserService() *UserService {
 func (s *UserService) GetAll() []models.User {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	result := make([]models.User, 0, len(s.users))
 	for _, u := range s.users {
 		result = append(result, u)
 	}
+
+	// Стабильный порядок по ID
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].ID < result[j].ID
+	})
+
 	return result
 }
 
 func (s *UserService) GetByID(id int) (models.User, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	user, exists := s.users[id]
 	if !exists {
 		return models.User{}, errors.New("user not found")
@@ -44,7 +51,7 @@ func (s *UserService) GetByID(id int) (models.User, error) {
 func (s *UserService) Create(user models.User) models.User {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	user.ID = s.nextID
 	s.nextID++
 	s.users[user.ID] = user
@@ -54,12 +61,12 @@ func (s *UserService) Create(user models.User) models.User {
 func (s *UserService) Update(id int, updated models.User) (models.User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	_, exists := s.users[id]
 	if !exists {
 		return models.User{}, errors.New("user not found")
 	}
-	
+
 	updated.ID = id
 	s.users[id] = updated
 	return updated, nil
@@ -68,12 +75,12 @@ func (s *UserService) Update(id int, updated models.User) (models.User, error) {
 func (s *UserService) Delete(id int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	_, exists := s.users[id]
 	if !exists {
 		return errors.New("user not found")
 	}
-	
+
 	delete(s.users, id)
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -34,9 +35,23 @@ func Init() {
 func MetricsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		TotalRequests.WithLabelValues(r.Method, r.URL.Path).Inc()
+
+		// Используем шаблон маршрута (/api/users/{id}), а не конкретный URL с ID
+		route := mux.CurrentRoute(r)
+		path := "/unknown"
+		if route != nil {
+			if tmpl, err := route.GetPathTemplate(); err == nil {
+				path = tmpl
+			} else {
+				path = r.URL.Path
+			}
+		} else {
+			path = r.URL.Path
+		}
+
+		TotalRequests.WithLabelValues(r.Method, path).Inc()
 		next.ServeHTTP(w, r)
-		RequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(time.Since(start).Seconds())
+		RequestDuration.WithLabelValues(r.Method, path).Observe(time.Since(start).Seconds())
 	})
 }
 

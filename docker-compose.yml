@@ -1,10 +1,32 @@
 services:
+  minio:
+    image: pgsty/silo:RELEASE.2026-10-18T00-00-00Z
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    volumes:
+      - minio-data:/data
+    networks:
+      - microservice-net
+
   app:
     build: .
     ports:
       - "8080:8080"
     environment:
       - PORT=8080
+      - RATE_LIMIT=1000
+      - RATE_BURST=5000
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_USE_SSL=false
+    depends_on:
+      - minio
     restart: unless-stopped
     networks:
       - microservice-net
@@ -16,9 +38,11 @@ services:
       - app
     networks:
       - microservice-net
-# Запуск: docker run --rm --network go-microservice_microservice-net williamyeh/wrk \
-#   -t12 -c500 -d60s http://app:8080/api/users
 
 networks:
   microservice-net:
     driver: bridge
+    name: microservice-net
+
+volumes:
+  minio-data:

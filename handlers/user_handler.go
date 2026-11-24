@@ -56,8 +56,6 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	savedUser := h.service.Create(user)
-	
-	// Асинхронное логирование (goroutine)
 	utils.LogAction("CREATE", savedUser.ID)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -90,7 +88,6 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Асинхронное логирование (goroutine)
 	utils.LogAction("UPDATE", id)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -110,8 +107,6 @@ func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Асинхронное логирование (goroutine)
 	utils.LogAction("DELETE", id)
-
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -11,7 +11,6 @@ type User struct {
 	Email string `json:"email"`
 }
 
-// Валидация email согласно замечанию в ТЗ
 func (u *User) Validate() error {
 	if u.Name == "" {
 		return errors.New("name is required")

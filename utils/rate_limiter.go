@@ -3,14 +3,21 @@ package utils
 import (
 	"net"
 	"net/http"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
 )
 
+type entry struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
+
 type IPRateLimiter struct {
-	ips map[string]*rate.Limiter
+	ips map[string]*entry
 	mu  sync.RWMutex
 	r   rate.Limit
 	b   int
@@ -18,16 +25,19 @@ type IPRateLimiter struct {
 
 func NewIPRateLimiter(r rate.Limit, b int) *IPRateLimiter {
 	i := &IPRateLimiter{
-		ips: make(map[string]*rate.Limiter),
+		ips: make(map[string]*entry),
 		r:   r,
 		b:   b,
 	}
-	// Периодическая очистка старых IP, чтобы map не рос бесконечно
 	go func() {
 		for {
-			time.Sleep(10 * time.Minute)
+			time.Sleep(5 * time.Minute)
 			i.mu.Lock()
-			i.ips = make(map[string]*rate.Limiter)
+			for ip, e := range i.ips {
+				if time.Since(e.lastSeen) > 10*time.Minute {
+					delete(i.ips, ip)
+				}
+			}
 			i.mu.Unlock()
 		}
 	}()
@@ -36,28 +46,54 @@ func NewIPRateLimiter(r rate.Limit, b int) *IPRateLimiter {
 
 func (i *IPRateLimiter) GetLimiter(ip string) *rate.Limiter {
 	i.mu.RLock()
-	limiter, exists := i.ips[ip]
+	e, exists := i.ips[ip]
 	i.mu.RUnlock()
 
 	if exists {
-		return limiter
+		i.mu.Lock()
+		e.lastSeen = time.Now()
+		i.mu.Unlock()
+		return e.limiter
 	}
 
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	// Повторная проверка после захвата блокировки (double-check)
-	if limiter, exists = i.ips[ip]; exists {
-		return limiter
+	if e, exists = i.ips[ip]; exists {
+		e.lastSeen = time.Now()
+		return e.limiter
 	}
 
-	limiter = rate.NewLimiter(i.r, i.b)
-	i.ips[ip] = limiter
-	return limiter
+	e = &entry{
+		limiter:  rate.NewLimiter(i.r, i.b),
+		lastSeen: time.Now(),
+	}
+	i.ips[ip] = e
+	return e.limiter
 }
 
-// Лимитер на 1000 rps / burst 5000 согласно ТЗ (per-IP).
-var ipLimiter = NewIPRateLimiter(1000, 5000)
+func getEnvFloat(key string, fallback float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+var ipLimiter = NewIPRateLimiter(
+	rate.Limit(getEnvFloat("RATE_LIMIT", 1000)),
+	getEnvInt("RATE_BURST", 5000),
+)
 
 func RateLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -65,9 +101,7 @@ func RateLimitMiddleware(next http.Handler) http.Handler {
 		if err != nil {
 			ip = r.RemoteAddr
 		}
-
-		limiter := ipLimiter.GetLimiter(ip)
-		if !limiter.Allow() {
+		if !ipLimiter.GetLimiter(ip).Allow() {
 			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 			return
 		}

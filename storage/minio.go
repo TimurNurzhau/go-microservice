@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -26,7 +27,8 @@ func InitMinIO() (*minio.Client, error) {
 	}
 
 	bucketName := "users-avatars"
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	exists, err := minioClient.BucketExists(ctx, bucketName)
 	if err != nil {
@@ -34,8 +36,7 @@ func InitMinIO() (*minio.Client, error) {
 	}
 
 	if !exists {
-		err = minioClient.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
-		if err != nil {
+		if err = minioClient.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{}); err != nil {
 			return nil, fmt.Errorf("ошибка создания бакета: %w", err)
 		}
 		log.Printf("MinIO: бакет %s успешно создан\n", bucketName)

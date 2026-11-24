@@ -1,6 +1,6 @@
 services:
   minio:
-    image: pgsty/silo:RELEASE.2026-10-18T00-00-00Z
+    image: minio/minio:latest
     command: server /data --console-address ":9001"
     ports:
       - "9000:9000"
@@ -12,6 +12,12 @@ services:
       - minio-data:/data
     networks:
       - microservice-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
 
   app:
     build: .
@@ -26,16 +32,24 @@ services:
       - MINIO_SECRET_KEY=minioadmin
       - MINIO_USE_SSL=false
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - microservice-net
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
   wrk:
     image: williamyeh/wrk
     profiles: ["test"]
     depends_on:
-      - app
+      app:
+        condition: service_healthy
     networks:
       - microservice-net
 

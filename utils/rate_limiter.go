@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -13,7 +14,7 @@ import (
 
 type entry struct {
 	limiter  *rate.Limiter
-	lastSeen time.Time
+	lastSeen atomic.Int64
 }
 
 type IPRateLimiter struct {
@@ -29,30 +30,36 @@ func NewIPRateLimiter(r rate.Limit, b int) *IPRateLimiter {
 		r:   r,
 		b:   b,
 	}
+
 	go func() {
-		for {
-			time.Sleep(5 * time.Minute)
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			now := time.Now().UnixNano()
+
 			i.mu.Lock()
 			for ip, e := range i.ips {
-				if time.Since(e.lastSeen) > 10*time.Minute {
+				if now-e.lastSeen.Load() > int64(10*time.Minute) {
 					delete(i.ips, ip)
 				}
 			}
 			i.mu.Unlock()
 		}
 	}()
+
 	return i
 }
 
 func (i *IPRateLimiter) GetLimiter(ip string) *rate.Limiter {
 	i.mu.RLock()
 	e, exists := i.ips[ip]
+	if exists {
+		e.lastSeen.Store(time.Now().UnixNano())
+	}
 	i.mu.RUnlock()
 
 	if exists {
-		i.mu.Lock()
-		e.lastSeen = time.Now()
-		i.mu.Unlock()
 		return e.limiter
 	}
 
@@ -60,15 +67,14 @@ func (i *IPRateLimiter) GetLimiter(ip string) *rate.Limiter {
 	defer i.mu.Unlock()
 
 	if e, exists = i.ips[ip]; exists {
-		e.lastSeen = time.Now()
+		e.lastSeen.Store(time.Now().UnixNano())
 		return e.limiter
 	}
 
-	e = &entry{
-		limiter:  rate.NewLimiter(i.r, i.b),
-		lastSeen: time.Now(),
-	}
+	e = &entry{limiter: rate.NewLimiter(i.r, i.b)}
+	e.lastSeen.Store(time.Now().UnixNano())
 	i.ips[ip] = e
+
 	return e.limiter
 }
 
@@ -101,10 +107,12 @@ func RateLimitMiddleware(next http.Handler) http.Handler {
 		if err != nil {
 			ip = r.RemoteAddr
 		}
+
 		if !ipLimiter.GetLimiter(ip).Allow() {
 			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 			return
 		}
+
 		next.ServeHTTP(w, r)
 	})
 }

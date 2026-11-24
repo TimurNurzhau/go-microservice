@@ -1,5 +1,5 @@
 # Этап сборки
-FROM golang:latest-alpine AS builder
+FROM golang:1.26.1-alpine AS builder
 
 WORKDIR /app
 

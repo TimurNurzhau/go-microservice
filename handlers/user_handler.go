@@ -20,9 +20,8 @@ func NewUserHandler(service *services.UserService) *UserHandler {
 }
 
 func (h *UserHandler) GetAll(w http.ResponseWriter, r *http.Request) {
-	users := h.service.GetAll()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(users)
+	_, _ = w.Write(h.service.GetAllJSON())
 }
 
 func (h *UserHandler) GetByID(w http.ResponseWriter, r *http.Request) {

@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -67,7 +68,37 @@ func (w *statusRecorder) Write(body []byte) (int, error) {
 	return w.ResponseWriter.Write(body)
 }
 
-func Instrument(endpoint string, next http.Handler) http.Handler {
+func (w *statusRecorder) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+// Instrument binds metric children when the route is registered, rather than
+// looking them up by method and endpoint labels for every request.
+func Instrument(method, endpoint string, next http.Handler) http.Handler {
+	requestCounter := TotalRequests.WithLabelValues(method, endpoint)
+	durationObserver := RequestDuration.WithLabelValues(method, endpoint)
+
+	errorCounters := make(map[int]prometheus.Counter)
+	for _, code := range []int{
+		http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusForbidden,
+		http.StatusNotFound,
+		http.StatusMethodNotAllowed,
+		http.StatusRequestTimeout,
+		http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout,
+	} {
+		errorCounters[code] = HTTPErrorTotal.WithLabelValues(
+			method,
+			endpoint,
+			http.StatusText(code),
+		)
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		recorder := &statusRecorder{
@@ -77,15 +108,19 @@ func Instrument(endpoint string, next http.Handler) http.Handler {
 
 		next.ServeHTTP(recorder, r)
 
-		TotalRequests.WithLabelValues(r.Method, endpoint).Inc()
-		RequestDuration.
-			WithLabelValues(r.Method, endpoint).
-			Observe(time.Since(start).Seconds())
+		requestCounter.Inc()
+		durationObserver.Observe(time.Since(start).Seconds())
 
 		if recorder.status >= http.StatusBadRequest {
-			HTTPErrorTotal.
-				WithLabelValues(r.Method, endpoint, http.StatusText(recorder.status)).
-				Inc()
+			if counter, ok := errorCounters[recorder.status]; ok {
+				counter.Inc()
+			} else {
+				HTTPErrorTotal.WithLabelValues(
+					method,
+					endpoint,
+					strconv.Itoa(recorder.status),
+				).Inc()
+			}
 		}
 	})
 }

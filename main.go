@@ -1,10 +1,10 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"go-microservice/handlers"
 	"go-microservice/metrics"
@@ -16,8 +16,7 @@ import (
 )
 
 func main() {
-	_, err := storage.InitMinIO()
-	if err != nil {
+	if _, err := storage.InitMinIO(); err != nil {
 		log.Printf("Предупреждение: S3-хранилище не инициализировано: %v", err)
 	} else {
 		log.Println("S3-хранилище успешно инициализировано")
@@ -29,17 +28,18 @@ func main() {
 
 	metrics.Init()
 
-	r := mux.NewRouter()
+	router := mux.NewRouter()
+	router.Handle("/metrics", metrics.Handler()).Methods(http.MethodGet)
+	router.HandleFunc("/health", integrationHandler.HealthCheck).Methods(http.MethodGet)
 
-	r.Handle("/metrics", metrics.Handler()).Methods(http.MethodGet)
-	r.HandleFunc("/health", integrationHandler.HealthCheck).Methods(http.MethodGet)
+	api := router.PathPrefix("/api").Subrouter()
 
-	api := r.PathPrefix("/api").Subrouter()
-
-	// Метрики оборачивают rate limiter, чтобы учитывать также ответы 429.
+	// Rate limiter находится внутри instrumentation, поэтому ответы 429
+	// также учитываются в счётчиках ошибок и histogram.
 	api.Handle(
 		"/users",
 		metrics.Instrument(
+			http.MethodGet,
 			"/api/users",
 			utils.RateLimitMiddleware(http.HandlerFunc(userHandler.GetAll)),
 		),
@@ -48,6 +48,7 @@ func main() {
 	api.Handle(
 		"/users",
 		metrics.Instrument(
+			http.MethodPost,
 			"/api/users",
 			utils.RateLimitMiddleware(http.HandlerFunc(userHandler.Create)),
 		),
@@ -56,6 +57,7 @@ func main() {
 	api.Handle(
 		"/users/{id}",
 		metrics.Instrument(
+			http.MethodGet,
 			"/api/users/{id}",
 			utils.RateLimitMiddleware(http.HandlerFunc(userHandler.GetByID)),
 		),
@@ -64,6 +66,7 @@ func main() {
 	api.Handle(
 		"/users/{id}",
 		metrics.Instrument(
+			http.MethodPut,
 			"/api/users/{id}",
 			utils.RateLimitMiddleware(http.HandlerFunc(userHandler.Update)),
 		),
@@ -72,6 +75,7 @@ func main() {
 	api.Handle(
 		"/users/{id}",
 		metrics.Instrument(
+			http.MethodDelete,
 			"/api/users/{id}",
 			utils.RateLimitMiddleware(http.HandlerFunc(userHandler.Delete)),
 		),
@@ -84,10 +88,11 @@ func main() {
 
 	server := &http.Server{
 		Addr:              ":" + port,
-		Handler:           r,
-		ReadHeaderTimeout: 5_000_000_000, // 5 секунд
+		Handler:           router,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
-	fmt.Printf("Server started on port %s\n", port)
+	log.Printf("HTTP server listening on :%s", port)
 	log.Fatal(server.ListenAndServe())
 }

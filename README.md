@@ -1,22 +1,24 @@
 # Go Microservice — CRUD API
 
-HTTP-сервис на Go для управления пользователями. Реализованы CRUD API, ограничение частоты запросов, Prometheus-метрики, audit logging и запуск в Docker Compose.
+HTTP-сервис на Go для управления пользователями. В проекте реализованы CRUD API, IP-based rate limiting, метрики Prometheus, асинхронное audit-логирование, кеширование сериализованного ответа и интеграция с S3-совместимым хранилищем Silo.
+
+**Результат экспериментального нагрузочного теста:** `wrk -t12 -c500 -d60s` — около **113 605 запросов/с**, средняя задержка **7,44 мс**, ответов вне диапазона 2xx/3xx в выводе `wrk` не указано. Зафиксировано 9 таймаутов.
 
 ## Технологии
 
-- Go 1.22+
-- gorilla/mux — HTTP-роутинг
-- golang.org/x/time/rate — rate limiting
-- prometheus/client_golang — метрики
-- minio-go/v7 — S3 API client
+- Go 1.26.1
+- [gorilla/mux](https://github.com/gorilla/mux) — HTTP-маршрутизация
+- [golang.org/x/time/rate](https://pkg.go.dev/golang.org/x/time/rate) — ограничение частоты запросов
+- [prometheus/client_golang](https://github.com/prometheus/client_golang) — метрики Prometheus
+- [minio-go/v7](https://github.com/minio/minio-go) — S3 API client
 - Docker Compose
-- Silo — локальное S3-совместимое хранилище для разработки
-
-> В текущей конфигурации Compose используется Silo, а не MinIO. Если для сдачи требуется именно MinIO, замените образ хранилища на доступный образ MinIO и проверьте запуск на чистой машине.
+- Silo — S3-совместимое хранилище
 
 ## Запуск
 
-```powershell
+Собрать и запустить сервисы:
+
+```sh
 docker compose up -d --build
 docker compose ps
 docker compose logs app --tail=100
@@ -24,55 +26,63 @@ docker compose logs app --tail=100
 
 Проверить работоспособность:
 
-```powershell
-curl.exe http://localhost:8080/health
-curl.exe http://localhost:8080/api/users
-curl.exe http://localhost:8080/metrics
+```sh
+curl http://localhost:8080/health
+curl http://localhost:8080/api/users
+curl http://localhost:8080/metrics
 ```
 
-Остановить контейнеры, сохранив volume:
+Остановить контейнеры, сохранив данные в volume:
 
-```powershell
+```sh
 docker compose down
+```
+
+Удалить контейнеры и volumes:
+
+```sh
+docker compose down -v
 ```
 
 ## API
 
 | Метод | URL | Описание |
 |---|---|---|
-| GET | `/api/users` | Получить всех пользователей |
-| GET | `/api/users/{id}` | Получить пользователя по ID |
-| POST | `/api/users` | Создать пользователя |
-| PUT | `/api/users/{id}` | Обновить пользователя |
-| DELETE | `/api/users/{id}` | Удалить пользователя |
-| GET | `/metrics` | Получить метрики Prometheus |
-| GET | `/health` | Проверить состояние сервиса |
+| `GET` | `/api/users` | Получить список пользователей |
+| `GET` | `/api/users/{id}` | Получить пользователя по ID |
+| `POST` | `/api/users` | Создать пользователя |
+| `PUT` | `/api/users/{id}` | Обновить пользователя |
+| `DELETE` | `/api/users/{id}` | Удалить пользователя |
+| `GET` | `/health` | Проверить состояние сервиса |
+| `GET` | `/metrics` | Получить метрики Prometheus |
 
 Пример создания пользователя:
 
-```powershell
-curl.exe -X POST http://localhost:8080/api/users `
-  -H "Content-Type: application/json" `
+```sh
+curl -X POST http://localhost:8080/api/users \
+  -H "Content-Type: application/json" \
   -d '{"name":"Ivan","email":"ivan@example.com"}'
 ```
 
 ## Метрики Prometheus
 
-Эндпоинт метрик: `http://localhost:8080/metrics`.
+Метрики доступны по адресу `http://localhost:8080/metrics`.
 
 Экспортируются:
 
 - `http_requests_total` — количество запросов;
-- `http_request_duration_seconds` — длительность запросов;
-- `http_errors_total` — ответы с кодами 4xx и 5xx.
+- `http_request_duration_seconds` — гистограмма длительности запросов;
+- `http_errors_total` — количество ответов 4xx и 5xx, включая `429 Too Many Requests`.
 
-RPS можно получить в Prometheus запросом:
+Для меток `endpoint` используются шаблоны маршрутов, например `/api/users/{id}`, а не конкретные ID. Это помогает избежать избыточной кардинальности метрик.
+
+Количество запросов в секунду за период:
 
 ```promql
 rate(http_requests_total[1m])
 ```
 
-Средняя latency за период:
+Средняя длительность запроса за период:
 
 ```promql
 rate(http_request_duration_seconds_sum[1m])
@@ -82,25 +92,96 @@ rate(http_request_duration_seconds_count[1m])
 
 ## Rate limiting
 
-По умолчанию в Compose настроены:
+По умолчанию в `docker-compose.yml` настроены:
 
-- `RATE_LIMIT=1000` запросов в секунду на IP;
-- `RATE_BURST=5000` запросов burst.
+- `RATE_LIMIT=1000` — запросов в секунду на IP;
+- `RATE_BURST=5000` — размер burst.
 
-При превышении лимита API возвращает HTTP 429. Значения можно переопределить переменными окружения.
+При превышении лимита сервис возвращает `429 Too Many Requests`. Значения можно переопределить переменными окружения.
 
-## Нагрузочное тестирование с wrk
+Реализация ограничителя:
 
-Запустить тест из Docker-сети проекта:
+- карта IP-адресов разделена на 64 шарда для снижения конкуренции при обращении;
+- время последней активности хранится в `atomic.Int64` и обновляется с интервалом;
+- неактивные записи очищаются каждые 5 минут; TTL составляет 10 минут.
 
-```powershell
-docker run --rm --network microservice-net williamyeh/wrk `
-  -t12 -c500 -d60s `
-  http://app:8080/api/users
-```
+## Кеширование ответа
 
-Сохраните полный вывод теста, включая `Requests/sec`, `Latency` и строки `Socket errors`. Указывайте в отчёте только фактически полученные результаты. Результаты зависят от CPU, памяти, Docker Desktop/WSL2 и настроек rate limiter.
+Для `GET /api/users` сервис хранит готовое JSON-представление списка в `atomic.Value`. Кеш перестраивается при создании, обновлении или удалении пользователя. Поэтому список не требуется сериализовать заново при каждом GET-запросе.
+
+## Audit logging
+
+События аудита передаются в буферизованный канал ёмкостью 10 000 записей и обрабатываются отдельной goroutine. Отправка записи неблокирующая: если канал заполнен, новая запись пропускается, чтобы не задерживать HTTP-запрос.
 
 ## Хранение данных
 
-CRUD-данные пользователей хранятся в памяти процесса, поэтому удаляются при перезапуске приложения. S3-клиент при запуске проверяет подключение к хранилищу и инициализирует бакет. Пользовательские записи в S3 в текущей реализации не сохраняются.
+Данные пользователей хранятся в памяти приложения (`map[int]User`) и теряются при перезапуске контейнера.
+
+Silo используется как S3-совместимое хранилище. При запуске приложение проверяет наличие бакета `users-avatars`, создаёт его при необходимости и загружает тестовый объект `test-connection.txt`. CRUD-записи пользователей в S3 не сохраняются.
+
+Для подключения используется `minio-go/v7`. Если S3-хранилище недоступно, приложение записывает предупреждение и продолжает запуск.
+
+## Нагрузочное тестирование
+
+### Проверка штатного rate limiter
+
+```sh
+docker run --rm --network microservice-net williamyeh/wrk \
+  -t12 -c500 -d60s \
+  http://app:8080/api/users
+```
+
+При штатном лимите все запросы от одного IP учитываются общим rate limiter, поэтому при высокой интенсивности часть запросов может получить `429 Too Many Requests`.
+
+### Экспериментальное измерение пропускной способности
+
+Для отдельного benchmark лимит временно повышался до `RATE_LIMIT=500000` и `RATE_BURST=500000`. Такой тест измеряет пропускную способность приложения при практически неограничивающем rate limiter и не отражает работу при штатных настройках.
+
+Результат одного прогона:
+
+- команда: `wrk -t12 -c500 -d60s http://app:8080/api/users`;
+- запросов: 6 816 283 за 60 секунд;
+- средняя пропускная способность: около 113 605 запросов/с;
+- средняя задержка: 7,44 мс;
+- ответов вне диапазона 2xx/3xx в выводе `wrk` не указано;
+- таймауты: 9, около 0,00013% от общего числа запросов.
+
+Результаты зависят от конфигурации компьютера, Docker и среды выполнения. Причина таймаутов отдельно не устанавливалась.
+
+## Тесты
+
+Запустить тесты:
+
+```sh
+go test ./... -v
+```
+
+Запустить тесты с race detector в среде с настроенным CGO и C-компилятором:
+
+```sh
+go test ./... -v -race
+```
+
+Тесты API проверяют создание и получение пользователей, валидацию email и имени, некорректный JSON, ответы 404, обновление и удаление.
+
+## CI/CD
+
+- **CI** (`.github/workflows/ci.yml`): `go vet`, проверка `gofmt`, тесты Go и сборка Docker-образа.
+- **CD** (`.github/workflows/cd.yml`): публикация образа в GHCR после успешного CI для `main`.
+
+## Структура проекта
+
+```text
+.
+├── main.go
+├── handlers/          # HTTP-обработчики и тесты
+├── services/          # бизнес-логика и кеш JSON
+├── models/            # модель User и валидация
+├── metrics/           # Prometheus-метрики и middleware
+├── storage/           # инициализация S3-хранилища
+├── utils/             # audit logging и rate limiter
+├── Dockerfile
+├── docker-compose.yml
+├── go.mod
+└── go.sum
+```

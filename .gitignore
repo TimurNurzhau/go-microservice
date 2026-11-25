@@ -1,0 +1,9 @@
+# Бэкапы и временные файлы
+*.bak
+*.bin
+.env
+loadtest.js
+targets.txt
+
+# Результаты тестов
+coverage.out
